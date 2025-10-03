@@ -1,175 +1,220 @@
 """
-Enhanced Certificate Caption Generator - Streamlit App
-Production-ready web interface with beautiful UI
+Certificate Caption Generator with Mistral 7B
+Clean architecture: Streamlit Frontend + Ollama API Backend
+Optimized for RTX 3050 6GB GPU
 """
 
 import streamlit as st
 import os
 import re
-import io
-import json
+import subprocess
 import tempfile
-import requests
+import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union
-from dataclasses import dataclass, asdict
-import logging
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+import json
 
 # Core libraries
 import cv2
 import numpy as np
 from PIL import Image
-import fitz  # PyMuPDF
 import pytesseract
-from pdf2image import convert_from_path, convert_from_bytes
 from textblob import TextBlob
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ============================================================
-# POPPLER CONFIGURATION
-# ============================================================
-# If you have Poppler installed, set the path to the bin folder here
-# Example for Windows: r"C:\Program Files\poppler-xx.xx.x\Library\bin"
-# Leave as None to use system PATH
-POPPLER_PATH = None  # Set this to your Poppler bin path if needed
-
-# Check if Poppler is available
-POPPLER_AVAILABLE = False
+# Try optional imports
 try:
-    from pdf2image.exceptions import PDFInfoNotInstalledError
-    if POPPLER_PATH:
-        os.environ['PATH'] = POPPLER_PATH + os.pathsep + os.environ.get('PATH', '')
-    # Test if poppler works
-    import subprocess
-    subprocess.run(['pdftoppm', '-v'], capture_output=True, check=False)
-    POPPLER_AVAILABLE = True
-except:
-    pass
+    import fitz  # PyMuPDF
+    PDF_SUPPORT = True
+except ImportError:
+    PDF_SUPPORT = False
 
-# Try EasyOCR
 try:
     import easyocr
     EASYOCR_AVAILABLE = True
 except ImportError:
     EASYOCR_AVAILABLE = False
 
-# Page configuration
+# ============================================================================
+# PAGE CONFIGURATION
+# ============================================================================
+
 st.set_page_config(
-    page_title="Certificate Caption Generator",
+    page_title="AI Certificate Caption Generator",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for beautiful UI
+# ============================================================================
+# CUSTOM CSS - FUTURISTIC DARK THEME
+# ============================================================================
+
 st.markdown("""
     <style>
-    .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    
+    * {
+        font-family: 'Inter', sans-serif;
     }
+    
+    /* Main background */
     .stApp {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
+        color: #e0e0ff;
     }
-    .css-1d391kg {
-        background-color: white;
-        padding: 2rem;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    h1 {
-        color: #667eea;
+    
+    /* Headers with gradient */
+    h1, h2, h3 {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
         font-weight: 700;
-        text-align: center;
-        padding: 1rem 0;
     }
-    h2, h3 {
-        color: #764ba2;
-    }
+    
+    /* Buttons */
     .stButton>button {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
         border: none;
+        border-radius: 12px;
         padding: 0.75rem 2rem;
-        border-radius: 25px;
         font-weight: 600;
+        font-size: 1.1rem;
         transition: all 0.3s;
-        width: 100%;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
     }
+    
     .stButton>button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
     }
-    .upload-section {
-        background: white;
-        padding: 2rem;
-        border-radius: 15px;
-        border: 2px dashed #667eea;
-        text-align: center;
-        margin: 1rem 0;
+    
+    /* Input fields */
+    .stTextInput>div>div>input,
+    .stTextArea>div>div>textarea,
+    .stSelectbox>div>div>select {
+        background: rgba(255, 255, 255, 0.05) !important;
+        border: 1px solid rgba(102, 126, 234, 0.3) !important;
+        border-radius: 10px !important;
+        color: #ffffff !important;
+        padding: 0.8rem !important;
     }
+    
+    .stTextInput>div>div>input:focus,
+    .stTextArea>div>div>textarea:focus {
+        border-color: rgba(102, 126, 234, 0.8) !important;
+        box-shadow: 0 0 20px rgba(102, 126, 234, 0.4) !important;
+    }
+    
+    /* Sidebar */
+    [data-testid="stSidebar"] {
+        background: rgba(15, 12, 41, 0.95) !important;
+        backdrop-filter: blur(15px);
+    }
+    
+    /* Caption output box */
     .caption-box {
-        background: white;
+        background: rgba(255, 255, 255, 0.05);
+        border-left: 4px solid #667eea;
+        border-radius: 12px;
         padding: 1.5rem;
-        border-radius: 15px;
-        border-left: 5px solid #667eea;
         margin: 1rem 0;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
     }
-    .metrics-card {
-        background: white;
+    
+    /* Metrics cards */
+    .metric-card {
+        background: rgba(102, 126, 234, 0.1);
+        border-radius: 12px;
         padding: 1rem;
-        border-radius: 10px;
-        text-align: center;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        border: 1px solid rgba(102, 126, 234, 0.3);
+        backdrop-filter: blur(10px);
     }
-    .success-message {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
+    
+    /* Success message */
+    .success-box {
+        background: rgba(76, 175, 80, 0.15);
+        border-left: 4px solid #4caf50;
+        border-radius: 12px;
         padding: 1rem;
-        border-radius: 10px;
         margin: 1rem 0;
+        color: #90ee90;
+    }
+    
+    /* Info box */
+    .info-box {
+        background: rgba(33, 150, 243, 0.15);
+        border-left: 4px solid #2196f3;
+        border-radius: 12px;
+        padding: 1rem;
+        margin: 1rem 0;
+        color: #90caf9;
+    }
+    
+    /* Skill badges */
+    .skill-badge {
+        display: inline-block;
+        background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
+        border: 1px solid rgba(102, 126, 234, 0.4);
+        padding: 0.4rem 0.8rem;
+        border-radius: 20px;
+        margin: 0.2rem;
+        font-size: 0.85rem;
+        color: #b8b8ff;
+    }
+    
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+        width: 10px;
+    }
+    
+    ::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.02);
+    }
+    
+    ::-webkit-scrollbar-thumb {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        border-radius: 10px;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Data Classes
+# ============================================================================
+# DATA CLASSES
+# ============================================================================
+
 @dataclass
-class CertificateAnalysis:
-    """Data class for certificate analysis results"""
+class CertificateData:
+    """Extracted certificate information"""
     title: str = ""
     organization: str = ""
     recipient_name: str = ""
-    completion_status: str = ""
-    skills_covered: List[str] = None
-    duration: str = ""
     date_issued: str = ""
-    certificate_type: str = ""
-    confidence_score: float = 0.0
-    industry: str = ""
-    
-    def __post_init__(self):
-        if self.skills_covered is None:
-            self.skills_covered = []
+    skills: List[str] = field(default_factory=list)
+    industry: str = "general"
+    certificate_type: str = "course"
+    raw_text: str = ""
 
 @dataclass
-class CaptionTemplate:
-    """Data class for caption templates"""
-    name: str
-    style: str
-    opening: List[str]
-    achievement_templates: Dict[str, str]
-    value_statements: List[str]
-    call_to_actions: List[str]
-    hashtag_style: str
+class CaptionPreferences:
+    """User preferences for caption generation"""
+    tone: str = "professional"
+    platform: str = "linkedin"
+    length: str = "medium"
+    include_hashtags: bool = True
+    include_skills: bool = True
+    custom_message: str = ""
+    emoji_style: str = "minimal"
 
-# Core Analyzer Class
-class CertificateAnalyzer:
-    """Enhanced certificate analyzer with OCR and NLP"""
+# ============================================================================
+# OCR ENGINE
+# ============================================================================
+
+class CertificateOCR:
+    """Handles OCR extraction from certificates"""
     
     def __init__(self):
         self.pytesseract_config = r'--oem 3 --psm 6 -l eng'
@@ -180,579 +225,701 @@ class CertificateAnalyzer:
                 self.easyocr_reader = easyocr.Reader(['en'], verbose=False)
             except:
                 pass
-        
-        self.certificate_keywords = {
-            'completion': ['completed', 'finished', 'successfully completed', 'accomplished', 
-                          'certified', 'graduated', 'achieved', 'earned', 'obtained'],
-            'course_types': ['course', 'training', 'program', 'workshop', 'certification',
-                           'bootcamp', 'seminar', 'webinar', 'masterclass'],
-            'organization_indicators': ['organized by', 'conducted by', 'hosted by', 
-                                       'presented by', 'issued by', 'from', 'by', 'offered by'],
-            'skill_indicators': ['skills', 'learned', 'covered', 'topics', 'subjects', 
-                               'modules', 'curriculum', 'competencies'],
-            'duration_patterns': [
-                r'(\d+)\s*(hour|hr|hours|hrs|week|weeks|wk|wks|month|months|mon|mos|day|days|year|years|yr|yrs)'
-            ]
-        }
-        
-        self.industry_hashtags = {
-            'technology': ['#TechSkills', '#Programming', '#SoftwareDevelopment', '#Innovation'],
-            'data_science': ['#DataScience', '#MachineLearning', '#Analytics', '#AI'],
-            'design': ['#Design', '#UXDesign', '#CreativeSkills', '#UserExperience'],
-            'business': ['#BusinessSkills', '#Leadership', '#Management', '#Strategy'],
-            'marketing': ['#DigitalMarketing', '#MarketingStrategy', '#SocialMedia'],
-            'finance': ['#Finance', '#FinTech', '#Investment', '#Accounting'],
-            'healthcare': ['#Healthcare', '#MedicalTraining', '#HealthTech'],
-            'education': ['#Education', '#Teaching', '#LearningAndDevelopment'],
-            'general': ['#ProfessionalDevelopment', '#SkillBuilding', '#CareerGrowth']
-        }
-        
-        self._load_caption_templates()
     
-    def _load_caption_templates(self):
-        """Load caption templates"""
-        self.caption_templates = {
-            'professional': CaptionTemplate(
-                name="Professional",
-                style="formal",
-                opening=["I'm pleased to share", "I'm proud to announce", "Excited to share"],
-                achievement_templates={
-                    'course': "I have successfully completed the {title} course{organization_text}.",
-                    'workshop': "I participated in the {title} workshop{organization_text}.",
-                    'certification': "I have earned certification in {title}{organization_text}."
-                },
-                value_statements=[
-                    "This achievement strengthens my professional capabilities and expertise.",
-                    "The knowledge gained will be valuable in delivering exceptional results.",
-                    "This learning experience enhances my ability to contribute effectively."
-                ],
-                call_to_actions=[
-                    "Looking forward to applying these skills professionally.",
-                    "Ready to contribute with enhanced expertise.",
-                    "Excited to leverage this knowledge in future endeavors."
-                ],
-                hashtag_style="professional"
-            ),
-            'enthusiastic': CaptionTemplate(
-                name="Enthusiastic",
-                style="casual",
-                opening=["Hey LinkedIn! 🎉", "Thrilled to share! 🚀", "Amazing news! ✨"],
-                achievement_templates={
-                    'course': "🎓 Just crushed the {title} course{organization_text}! 💪",
-                    'workshop': "🎯 Had an incredible time at the {title} workshop{organization_text}! 🔥",
-                    'certification': "🏆 Officially certified in {title}{organization_text}! 🎊"
-                },
-                value_statements=[
-                    "This journey has been absolutely transformative! 🌟",
-                    "Can't wait to put these amazing skills to work! 💡",
-                    "Feeling more confident and ready to tackle new challenges! 💪"
-                ],
-                call_to_actions=[
-                    "Bring on the exciting projects! 🚀",
-                    "Ready to make some magic happen! ✨",
-                    "Let's connect and create something awesome! 🤝"
-                ],
-                hashtag_style="enthusiastic"
-            ),
-            'technical': CaptionTemplate(
-                name="Technical",
-                style="detailed",
-                opening=["Technical milestone achieved", "Completed advanced training in"],
-                achievement_templates={
-                    'course': "Successfully completed comprehensive training in {title}{organization_text}.",
-                    'workshop': "Participated in intensive {title} workshop{organization_text}.",
-                    'certification': "Achieved professional certification in {title}{organization_text}."
-                },
-                value_statements=[
-                    "This training provides practical skills directly applicable to complex technical challenges.",
-                    "The curriculum covered industry best practices and cutting-edge methodologies.",
-                    "Gained hands-on experience with essential tools and frameworks."
-                ],
-                call_to_actions=[
-                    "Ready to implement these methodologies in real-world projects.",
-                    "Excited to contribute to technically challenging initiatives.",
-                    "Looking forward to collaborating on innovative solutions."
-                ],
-                hashtag_style="technical"
-            )
-        }
+    def preprocess_image(self, image: np.ndarray) -> np.ndarray:
+        """Enhance image for better OCR"""
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply adaptive thresholding
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+        
+        # Denoise
+        denoised = cv2.fastNlMeansDenoising(binary, None, 10, 7, 21)
+        
+        return denoised
     
-    def enhance_image(self, image: Image.Image) -> Image.Image:
-        """Enhanced image preprocessing"""
+    def extract_from_image(self, image_path: str) -> Dict:
+        """Extract text from image using dual OCR"""
+        img = cv2.imread(image_path)
+        processed = self.preprocess_image(img)
+        
+        results = {
+            'text': '',
+            'confidence': 0.0,
+            'method': 'pytesseract'
+        }
+        
+        # Try PyTesseract first
         try:
-            img_array = np.array(image)
-            if len(img_array.shape) == 3:
-                gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = img_array
-            
-            denoised = cv2.fastNlMeansDenoising(gray)
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-            enhanced = clahe.apply(denoised)
-            kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-            sharpened = cv2.filter2D(enhanced, -1, kernel)
-            
-            return Image.fromarray(sharpened)
+            text = pytesseract.image_to_string(processed, config=self.pytesseract_config)
+            results['text'] = text
+            results['confidence'] = 0.8
         except Exception as e:
-            logger.warning(f"Image enhancement failed: {e}")
-            return image
+            st.warning(f"PyTesseract failed: {e}")
+        
+        # Try EasyOCR if available and text is poor
+        if self.easyocr_reader and (not results['text'] or len(results['text']) < 50):
+            try:
+                easyocr_results = self.easyocr_reader.readtext(image_path)
+                easyocr_text = ' '.join([text for (_, text, conf) in easyocr_results if conf > 0.3])
+                
+                if len(easyocr_text) > len(results['text']):
+                    results['text'] = easyocr_text
+                    results['method'] = 'easyocr'
+                    results['confidence'] = 0.85
+            except Exception as e:
+                st.warning(f"EasyOCR failed: {e}")
+        
+        return results
     
-    def extract_text_from_image(self, image_path: str) -> Dict:
-        """Extract text using OCR"""
-        try:
-            image = Image.open(image_path)
-            enhanced = self.enhance_image(image)
-            
-            # PyTesseract
-            text = pytesseract.image_to_string(enhanced, config=self.pytesseract_config)
-            confidence = 0.75
-            
-            # EasyOCR if available
-            if self.easyocr_reader:
-                try:
-                    img_array = np.array(enhanced)
-                    results = self.easyocr_reader.readtext(img_array, detail=1, paragraph=True)
-                    if results:
-                        easyocr_text = ' '.join([text for (_, text, conf) in results if conf > 0.3])
-                        if len(easyocr_text) > len(text):
-                            text = easyocr_text
-                            confidence = np.mean([conf for (_, _, conf) in results])
-                except:
-                    pass
-            
-            return {
-                'text': text,
-                'confidence': confidence,
-                'engine_used': 'multi-engine'
-            }
-        except Exception as e:
-            logger.error(f"Text extraction failed: {e}")
-            return {'text': '', 'confidence': 0.0, 'engine_used': 'failed'}
-    
-    def extract_text_from_pdf(self, pdf_path: str) -> Dict:
+    def extract_from_pdf(self, pdf_path: str) -> Dict:
         """Extract text from PDF"""
+        results = {
+            'text': '',
+            'confidence': 0.9,
+            'method': 'pymupdf'
+        }
+        
+        if not PDF_SUPPORT:
+            return results
+        
         try:
-            # Try direct text extraction with PyMuPDF first
             doc = fitz.open(pdf_path)
             text = ""
             for page in doc:
                 text += page.get_text() + "\n"
             doc.close()
             
-            if text.strip():
-                return {'text': text, 'confidence': 0.95, 'method': 'direct'}
-            
-            # OCR fallback - only if Poppler is available
-            if not POPPLER_AVAILABLE:
-                logger.warning("Poppler not available. Cannot perform OCR on PDF. Use image files (PNG/JPG) instead.")
-                return {
-                    'text': '', 
-                    'confidence': 0.0, 
-                    'method': 'failed',
-                    'error': 'Poppler not installed. Please upload an image file (PNG/JPG) or install Poppler for PDF support.'
-                }
-            
-            images = convert_from_path(
-                pdf_path, 
-                dpi=300,
-                poppler_path=POPPLER_PATH
-            )
-            all_text = ""
-            for i, img in enumerate(images):
-                temp_path = f"{tempfile.gettempdir()}/page_{i}.png"
-                img.save(temp_path)
-                result = self.extract_text_from_image(temp_path)
-                all_text += result['text'] + "\n"
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            
-            return {'text': all_text, 'confidence': 0.8, 'method': 'ocr'}
+            results['text'] = text
+            return results
         except Exception as e:
-            error_msg = str(e)
-            if 'poppler' in error_msg.lower():
-                logger.warning(f"Poppler-related error: {error_msg}")
-                return {
-                    'text': '', 
-                    'confidence': 0.0, 
-                    'method': 'failed',
-                    'error': 'Poppler not configured correctly. Please use image files (PNG/JPG) instead.'
-                }
-            logger.error(f"PDF extraction failed: {e}")
-            return {'text': '', 'confidence': 0.0, 'method': 'failed', 'error': str(e)}
+            st.error(f"PDF extraction failed: {e}")
+            return results
+
+# ============================================================================
+# DATA EXTRACTOR
+# ============================================================================
+
+class DataExtractor:
+    """Extracts structured data from OCR text"""
     
-    def detect_industry(self, text: str) -> str:
-        """Detect industry from text"""
-        text_lower = text.lower()
-        industry_keywords = {
-            'technology': ['programming', 'coding', 'software', 'python', 'java', 'web', 'app', 'development', 'developer', 'full stack'],
-            'data_science': ['data science', 'machine learning', 'analytics', 'ai', 'artificial intelligence', 'data analysis', 'deep learning'],
-            'design': ['design', 'ux', 'ui', 'graphic', 'creative', 'figma', 'wireframe'],
-            'business': ['business', 'management', 'leadership', 'strategy', 'project management', 'agile', 'scrum', 'employability', 'professional development', 'skill development'],
-            'marketing': ['marketing', 'social media', 'seo', 'content', 'digital marketing'],
-            'finance': ['finance', 'accounting', 'investment', 'banking', 'fintech'],
-            'healthcare': ['healthcare', 'medical', 'nursing', 'health'],
-            'education': ['education', 'teaching', 'learning', 'training', 'academic']
+    def __init__(self):
+        self.industry_keywords = {
+            'technology': ['programming', 'software', 'coding', 'development', 'tech', 'computer', 
+                          'python', 'java', 'javascript', 'web', 'mobile', 'app', 'data', 'ai', 'ml'],
+            'data_science': ['data science', 'machine learning', 'analytics', 'statistics', 'big data',
+                            'data analysis', 'visualization', 'pandas', 'numpy', 'tensorflow'],
+            'business': ['business', 'management', 'marketing', 'finance', 'accounting', 'mba',
+                        'leadership', 'strategy', 'entrepreneur', 'sales'],
+            'design': ['design', 'ui', 'ux', 'graphic', 'creative', 'photoshop', 'illustrator',
+                      'figma', 'adobe', 'branding'],
+            'cloud': ['aws', 'azure', 'cloud', 'devops', 'kubernetes', 'docker', 'gcp'],
+            'security': ['security', 'cybersecurity', 'ethical hacking', 'penetration', 'cissp'],
         }
-        
-        scores = {industry: sum(1 for kw in keywords if kw in text_lower) 
-                 for industry, keywords in industry_keywords.items()}
-        return max(scores, key=scores.get) if max(scores.values()) > 0 else 'general'
     
-    def analyze_certificate(self, text: str, confidence: float) -> CertificateAnalysis:
-        """Analyze certificate content"""
-        analysis = CertificateAnalysis()
-        analysis.confidence_score = confidence
-        
-        if not text.strip():
-            return analysis
-        
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
+    def extract(self, text: str) -> CertificateData:
+        """Extract all relevant data from text"""
+        data = CertificateData()
+        data.raw_text = text
         
         # Extract title
-        for line in lines:
-            if len(line) > 15 and len(line) < 100:
-                if not any(word in line.lower() for word in ['certificate', 'awarded', 'this', 'presented']):
-                    analysis.title = line
-                    break
+        data.title = self._extract_title(text)
         
         # Extract organization
-        org_patterns = [
-            r'(?:issued by|offered by|from)\s+([A-Za-z\s&,]+(?:University|Institute|College|Academy|Company|Inc))',
-        ]
-        for pattern in org_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                analysis.organization = matches[0].strip()
-                break
+        data.organization = self._extract_organization(text)
         
-        # Determine type
-        text_lower = text.lower()
-        if any(word in text_lower for word in ['workshop', 'seminar', 'webinar']):
-            analysis.certificate_type = 'workshop'
-        elif any(word in text_lower for word in ['program', 'bootcamp', 'training program']):
-            analysis.certificate_type = 'program'
-        elif any(word in text_lower for word in ['certification', 'certified', 'professional certificate']):
-            analysis.certificate_type = 'certification'
-        else:
-            analysis.certificate_type = 'course'
+        # Extract date
+        data.date_issued = self._extract_date(text)
         
-        # Extract skills with improved logic
-        skills = set()
-        
-        # Look for explicit skill mentions
-        skill_patterns = [
-            r'skills?:?\s*([^\n]+)',
-            r'topics?:?\s*([^\n]+)',
-            r'covered:?\s*([^\n]+)',
-            r'competencies:?\s*([^\n]+)'
-        ]
-        
-        for pattern in skill_patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                # Split by commas and common separators
-                parts = re.split(r'[,;•|\n]', match)
-                for part in parts:
-                    part = part.strip()
-                    if 3 < len(part) < 40:
-                        skills.add(part.title())
-        
-        # Use TextBlob as fallback
-        if len(skills) < 3:
-            try:
-                blob = TextBlob(text)
-                for phrase in blob.noun_phrases:
-                    phrase = str(phrase)  # Convert to string
-                    if 3 < len(phrase) < 30 and 1 <= len(phrase.split()) <= 3:
-                        # Filter out common non-skill phrases
-                        if not any(x in phrase.lower() for x in ['certificate', 'this', 'that', 'date', 'chief']):
-                            skills.add(phrase.title())
-            except:
-                pass
-        
-        analysis.skills_covered = list(skills)[:8]
+        # Extract skills
+        data.skills = self._extract_skills(text)
         
         # Detect industry
-        analysis.industry = self.detect_industry(text)
-        analysis.completion_status = 'completed'
+        data.industry = self._detect_industry(text)
         
-        # Extract duration
-        for pattern in self.certificate_keywords['duration_patterns']:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            if matches:
-                analysis.duration = f"{matches[0][0]} {matches[0][1]}"
-                break
+        # Determine certificate type
+        data.certificate_type = self._determine_type(text)
         
-        return analysis
+        return data
+    
+    def _extract_title(self, text: str) -> str:
+        """Extract certificate title"""
+        # Common patterns
+        patterns = [
+            r'certificate of (.*?)(?:\n|issued|presented|awarded)',
+            r'certification in (.*?)(?:\n|from|by)',
+            r'this certifies that.*?(?:completed|finished)\s+(.*?)(?:\n|from|on)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                title = match.group(1).strip()
+                # Clean up
+                title = re.sub(r'\s+', ' ', title)
+                if 10 < len(title) < 100:
+                    return title
+        
+        # Fallback: look for course/program keywords
+        lines = text.split('\n')
+        for line in lines:
+            if any(word in line.lower() for word in ['course', 'program', 'certification', 'bootcamp']):
+                if 10 < len(line) < 100:
+                    return line.strip()
+        
+        return "Professional Certification"
+    
+    def _extract_organization(self, text: str) -> str:
+        """Extract issuing organization"""
+        # Common patterns
+        patterns = [
+            r'(?:from|by|issued by)\s+([A-Z][A-Za-z\s&]+(?:University|Institute|Academy|College|Foundation|Inc|Ltd|Corporation|Company))',
+            r'([A-Z][A-Za-z\s&]+(?:University|Institute|Academy|College|Foundation))',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                org = match.group(1).strip()
+                if 5 < len(org) < 50:
+                    return org
+        
+        return "Professional Institution"
+    
+    def _extract_date(self, text: str) -> str:
+        """Extract issue date"""
+        # Date patterns
+        patterns = [
+            r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b',
+            r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b',
+            r'\b\d{4}\b'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(0)
+        
+        return datetime.now().strftime("%B %Y")
+    
+    def _extract_skills(self, text: str) -> List[str]:
+        """Extract skills mentioned in certificate"""
+        skills = set()
+        
+        # Look for skills section
+        skills_section_match = re.search(r'(?:skills?|topics?|covered)[\s:]+(.+?)(?:\n\n|\Z)', 
+                                        text, re.IGNORECASE | re.DOTALL)
+        
+        if skills_section_match:
+            skills_text = skills_section_match.group(1)
+            # Split by common delimiters
+            potential_skills = re.split(r'[,;•\n]', skills_text)
+            for skill in potential_skills:
+                skill = skill.strip()
+                if 2 < len(skill) < 30 and not any(char.isdigit() for char in skill):
+                    skills.add(skill.title())
+        
+        # Also check for common tech skills in full text
+        common_skills = [
+            'Python', 'Java', 'JavaScript', 'SQL', 'Machine Learning', 
+            'Data Analysis', 'Web Development', 'Cloud Computing', 'AWS',
+            'React', 'Node.js', 'Docker', 'Kubernetes', 'Git'
+        ]
+        
+        for skill in common_skills:
+            if skill.lower() in text.lower():
+                skills.add(skill)
+        
+        return list(skills)[:10]  # Limit to 10 skills
+    
+    def _detect_industry(self, text: str) -> str:
+        """Detect industry category"""
+        text_lower = text.lower()
+        scores = {industry: 0 for industry in self.industry_keywords}
+        
+        for industry, keywords in self.industry_keywords.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    scores[industry] += 1
+        
+        if max(scores.values()) > 0:
+            return max(scores, key=scores.get)
+        
+        return 'general'
+    
+    def _determine_type(self, text: str) -> str:
+        """Determine certificate type"""
+        text_lower = text.lower()
+        
+        if any(word in text_lower for word in ['completion', 'completed', 'finished']):
+            return 'completion'
+        elif any(word in text_lower for word in ['achievement', 'excellence', 'award']):
+            return 'achievement'
+        elif any(word in text_lower for word in ['participation', 'attended', 'workshop']):
+            return 'participation'
+        else:
+            return 'course'
 
-# Caption Generator
-class CaptionGenerator:
-    """Generate captions for different platforms"""
+# ============================================================================
+# MISTRAL AI CAPTION GENERATOR
+# ============================================================================
+
+class MistralCaptionGenerator:
+    """Generate captions using Mistral 7B via Ollama API"""
     
-    def __init__(self, analyzer: CertificateAnalyzer):
-        self.analyzer = analyzer
+    def __init__(self, model_name: str = "mistral:7b-instruct-q4_K_M"):
+        self.model_name = model_name
+        self.available = self._check_availability()
     
-    def generate_hashtags(self, analysis: CertificateAnalysis, platform: str = "linkedin") -> List[str]:
+    def _check_availability(self) -> bool:
+        """Check if Mistral is available"""
+        try:
+            result = subprocess.run(
+                ['ollama', 'list'],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return 'mistral' in result.stdout.lower()
+        except:
+            return False
+    
+    def generate_caption(self, cert_data: CertificateData, prefs: CaptionPreferences) -> Dict:
+        """Generate caption using Mistral 7B"""
+        if not self.available:
+            return {
+                'success': False,
+                'caption': '',
+                'error': 'Mistral model not available. Run: ollama pull mistral:7b-instruct-q4_K_M'
+            }
+        
+        # Build prompt
+        prompt = self._build_prompt(cert_data, prefs)
+        
+        # Call Ollama
+        start_time = time.time()
+        
+        try:
+            result = subprocess.run(
+                ['ollama', 'run', self.model_name, prompt],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding='utf-8',
+                errors='replace'
+            )
+            
+            elapsed = time.time() - start_time
+            
+            if result.returncode == 0:
+                caption = result.stdout.strip()
+                
+                # Post-process caption
+                caption = self._post_process(caption, prefs)
+                
+                return {
+                    'success': True,
+                    'caption': caption,
+                    'generation_time': elapsed,
+                    'model': self.model_name
+                }
+            else:
+                return {
+                    'success': False,
+                    'caption': '',
+                    'error': result.stderr
+                }
+                
+        except subprocess.TimeoutExpired:
+            return {
+                'success': False,
+                'caption': '',
+                'error': 'Generation timed out (>30s). Try again.'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'caption': '',
+                'error': str(e)
+            }
+    
+    def _build_prompt(self, cert_data: CertificateData, prefs: CaptionPreferences) -> str:
+        """Build optimized prompt for Mistral"""
+        
+        # Tone descriptions
+        tone_map = {
+            'professional': 'formal and business-appropriate',
+            'enthusiastic': 'energetic and excited',
+            'humble': 'modest and grateful',
+            'confident': 'assertive and achievement-focused',
+            'casual': 'friendly and conversational'
+        }
+        
+        # Length specifications
+        length_map = {
+            'short': '100-150 words',
+            'medium': '150-200 words',
+            'long': '200-250 words'
+        }
+        
+        # Emoji specifications
+        emoji_map = {
+            'none': 'No emojis',
+            'minimal': '2-3 emojis total',
+            'moderate': '4-6 emojis',
+            'enthusiastic': '8-10 emojis'
+        }
+        
+        prompt_parts = [
+            f"Generate a {prefs.platform.upper()} post caption for this certificate achievement.",
+            "",
+            "CERTIFICATE DETAILS:",
+            f"- Certificate: {cert_data.title}",
+            f"- Organization: {cert_data.organization}",
+            f"- Date: {cert_data.date_issued}",
+        ]
+        
+        if cert_data.skills:
+            prompt_parts.append(f"- Key Skills: {', '.join(cert_data.skills[:5])}")
+        
+        if cert_data.industry:
+            prompt_parts.append(f"- Industry: {cert_data.industry}")
+        
+        prompt_parts.extend([
+            "",
+            "REQUIREMENTS:",
+            f"- Tone: {tone_map.get(prefs.tone, 'professional')}",
+            f"- Length: {length_map.get(prefs.length, '150-200 words')}",
+            f"- Emojis: {emoji_map.get(prefs.emoji_style, 'minimal')}",
+        ])
+        
+        if prefs.custom_message:
+            prompt_parts.append(f"- Include this message: {prefs.custom_message}")
+        
+        prompt_parts.extend([
+            "",
+            "STRUCTURE:",
+            "1. Opening: Announce the achievement",
+            "2. Body: Describe what was learned and why it matters",
+        ])
+        
+        if prefs.include_skills:
+            prompt_parts.append("3. Skills: Highlight key skills gained")
+        
+        if prefs.include_hashtags:
+            prompt_parts.append("4. Hashtags: 5-8 relevant hashtags at the end")
+        
+        prompt_parts.extend([
+            "",
+            "IMPORTANT:",
+            "- Be authentic and personal",
+            "- Avoid generic phrases like 'excited to announce'",
+            "- Make it feel human-written, not AI-generated",
+            "- Focus on value and growth",
+            "",
+            "Generate the caption:"
+        ])
+        
+        return "\n".join(prompt_parts)
+    
+    def _post_process(self, caption: str, prefs: CaptionPreferences) -> str:
+        """Clean up and format the caption"""
+        # Remove any prompt artifacts
+        caption = caption.strip()
+        
+        # Ensure hashtags are at the end if requested
+        if prefs.include_hashtags and '#' in caption:
+            parts = caption.split('#')
+            text = parts[0].strip()
+            hashtags = ['#' + tag.strip() for tag in parts[1:] if tag.strip()]
+            caption = f"{text}\n\n{' '.join(hashtags)}"
+        
+        return caption
+    
+    def generate_hashtags(self, cert_data: CertificateData, count: int = 8) -> List[str]:
         """Generate relevant hashtags"""
         hashtags = set()
         
-        # Industry hashtags
-        industry_tags = self.analyzer.industry_hashtags.get(analysis.industry, 
-                                                            self.analyzer.industry_hashtags['general'])
-        hashtags.update(industry_tags[:3])
+        # Industry-based
+        industry_tags = {
+            'technology': ['Tech', 'Programming', 'SoftwareDevelopment', 'CodingLife'],
+            'data_science': ['DataScience', 'MachineLearning', 'AI', 'BigData', 'Analytics'],
+            'business': ['Business', 'Leadership', 'Management', 'Entrepreneurship'],
+            'design': ['Design', 'UX', 'UI', 'CreativeDesign', 'GraphicDesign'],
+            'cloud': ['CloudComputing', 'AWS', 'Azure', 'DevOps'],
+            'security': ['Cybersecurity', 'InfoSec', 'EthicalHacking'],
+        }
         
-        # Type-based hashtags
-        if analysis.certificate_type == 'course':
-            hashtags.update(["#OnlineLearning", "#ProfessionalDevelopment"])
-        elif analysis.certificate_type == 'workshop':
-            hashtags.update(["#Workshop", "#HandsOnLearning"])
-        else:
-            hashtags.update(["#Certification", "#Achievement"])
+        if cert_data.industry in industry_tags:
+            hashtags.update(industry_tags[cert_data.industry][:3])
         
-        return list(hashtags)[:10]
-    
-    def generate_caption(self, analysis: CertificateAnalysis, style: str = "professional", 
-                        platform: str = "linkedin", include_skills: bool = True) -> str:
-        """Generate caption"""
-        template = self.analyzer.caption_templates.get(style, 
-                                                       self.analyzer.caption_templates['professional'])
-        parts = []
+        # Generic professional tags
+        hashtags.update(['ProfessionalDevelopment', 'LifelongLearning', 'CareerGrowth'])
         
-        # Opening
-        parts.append(np.random.choice(template.opening))
-        parts.append("\n\n")
+        # Skills-based
+        for skill in cert_data.skills[:3]:
+            tag = skill.replace(' ', '').replace('-', '')
+            hashtags.add(tag)
         
-        # Achievement
-        org_text = f" by {analysis.organization}" if analysis.organization else ""
-        
-        # Get the right template, with 'program' as fallback to 'course'
-        cert_type = analysis.certificate_type if analysis.certificate_type in template.achievement_templates else 'course'
-        achievement = template.achievement_templates.get(cert_type, template.achievement_templates['course'])
-        
-        parts.append(achievement.format(title=analysis.title, organization_text=org_text))
-        parts.append("\n\n")
-        
-        # Skills - More detailed
-        if include_skills and analysis.skills_covered:
-            if len(analysis.skills_covered) > 4:
-                skills_text = ", ".join(analysis.skills_covered[:4])
-                parts.append(f"📚 Key competencies developed:\n{skills_text}, and more.\n\n")
-            else:
-                skills_text = ", ".join(analysis.skills_covered)
-                parts.append(f"📚 Key competencies developed: {skills_text}\n\n")
-        
-        # Value statement
-        parts.append(np.random.choice(template.value_statements))
-        parts.append("\n\n")
-        
-        # CTA
-        parts.append(np.random.choice(template.call_to_actions))
-        parts.append("\n\n")
-        
-        # Hashtags
-        hashtags = self.generate_hashtags(analysis, platform)
-        parts.append(" ".join(hashtags))
-        
-        return "".join(parts)
+        return ['#' + tag for tag in list(hashtags)[:count]]
 
-# Initialize analyzer and generator
-@st.cache_resource
-def get_analyzer():
-    return CertificateAnalyzer()
+# ============================================================================
+# MAIN APP
+# ============================================================================
 
-@st.cache_resource
-def get_generator(_analyzer):
-    return CaptionGenerator(_analyzer)
-
-analyzer = get_analyzer()
-generator = get_generator(analyzer)
-
-# Process file function
-def process_certificate_file(file_bytes, filename):
-    """Process uploaded certificate file"""
-    temp_path = os.path.join(tempfile.gettempdir(), filename)
-    
-    with open(temp_path, 'wb') as f:
-        f.write(file_bytes)
-    
-    try:
-        if filename.lower().endswith('.pdf'):
-            result = analyzer.extract_text_from_pdf(temp_path)
-        else:
-            result = analyzer.extract_text_from_image(temp_path)
-        
-        if result['text'].strip():
-            analysis = analyzer.analyze_certificate(result['text'], result['confidence'])
-            return {
-                'success': True,
-                'analysis': analysis,
-                'extraction_info': result
-            }
-        else:
-            return {'success': False, 'error': 'Could not extract text from file'}
-    finally:
-        try:
-            os.remove(temp_path)
-        except:
-            pass
-
-# Main App
 def main():
     # Header
-    st.markdown("<h1>🎓 Certificate Caption Generator</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #666; font-size: 1.2rem;'>Transform your certificates into professional LinkedIn captions instantly!</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center;'>🎓 AI Certificate Caption Generator</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #b8b8ff;'>Powered by Mistral 7B AI • Optimized for Professional LinkedIn Posts</p>", unsafe_allow_html=True)
+    st.markdown("<hr style='border: 1px solid rgba(102, 126, 234, 0.3);'>", unsafe_allow_html=True)
     
-    # Sidebar
+    # Initialize components
+    ocr = CertificateOCR()
+    extractor = DataExtractor()
+    generator = MistralCaptionGenerator()
+    
+    # Check Mistral availability
+    if not generator.available:
+        st.error("⚠️ Mistral 7B not found! Please run: `ollama pull mistral:7b-instruct-q4_K_M`")
+        st.stop()
+    
+    # Sidebar configuration
     with st.sidebar:
-        st.header("⚙️ Settings")
+        st.markdown("### ⚙️ Caption Settings")
         
-        style = st.selectbox(
-            "Caption Style",
-            ["professional", "enthusiastic", "technical"],
-            help="Choose the tone of your caption"
+        # Tone selection
+        tone = st.selectbox(
+            "Tone",
+            ["professional", "enthusiastic", "humble", "confident", "casual"],
+            help="Choose the overall tone of your caption"
         )
         
+        # Platform selection
         platform = st.selectbox(
             "Platform",
-            ["linkedin", "twitter", "instagram", "portfolio"],
-            help="Optimize caption for specific platform"
+            ["linkedin", "twitter", "instagram", "facebook"],
+            help="Optimize for specific social media platform"
         )
         
-        include_skills = st.checkbox("Include Skills", value=True, help="Add extracted skills to caption")
+        # Length selection
+        length = st.radio(
+            "Caption Length",
+            ["short", "medium", "long"],
+            index=1,
+            help="Short: ~100 words, Medium: ~150 words, Long: ~200 words"
+        )
+        
+        # Emoji style
+        emoji_style = st.select_slider(
+            "Emoji Usage",
+            options=["none", "minimal", "moderate", "enthusiastic"],
+            value="minimal",
+            help="How many emojis to include"
+        )
+        
+        # Toggles
+        include_hashtags = st.checkbox("Include Hashtags", value=True)
+        include_skills = st.checkbox("Highlight Skills", value=True)
+        
+        # Custom message
+        custom_message = st.text_area(
+            "Custom Message (Optional)",
+            placeholder="Add a personal note to include in the caption...",
+            help="This will be woven into your caption"
+        )
+        
+        st.markdown("---")
+        st.markdown("### 🤖 AI Model")
+        st.info("**Mistral 7B Q4**\nSpeed: ~6-8 seconds\nQuality: Excellent")
         
         st.markdown("---")
         st.markdown("### 📊 Features")
-        st.markdown("✅ Multi-engine OCR")
-        st.markdown("✅ Smart industry detection")
-        st.markdown("✅ 3 caption styles")
-        st.markdown("✅ 4 platform formats")
-        st.markdown("✅ Instant generation")
-        
-        st.markdown("---")
-        st.markdown("### 💡 Tips")
-        st.info("For best results, use clear, high-resolution images or PDFs")
+        st.markdown("✅ Dual OCR Engine")
+        st.markdown("✅ Smart Data Extraction")
+        st.markdown("✅ AI Caption Generation")
+        st.markdown("✅ Industry Detection")
+        st.markdown("✅ Custom Preferences")
     
-    # Main content
+    # Main content area
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.markdown("### 📤 Upload Certificate")
         
-        # Show Poppler status
-        if not POPPLER_AVAILABLE:
-            st.warning("⚠️ **PDF Support Limited**: Poppler not detected. Please upload image files (PNG/JPG) for best results.")
-            st.info("💡 To enable full PDF support, install Poppler and set POPPLER_PATH in the code.")
-        
         uploaded_file = st.file_uploader(
-            "Choose your certificate file",
+            "Choose your certificate",
             type=['pdf', 'png', 'jpg', 'jpeg'],
-            help="Upload PDF or image (PNG, JPG, JPEG). Images recommended if Poppler is not installed."
+            help="Upload PNG, JPG, or PDF certificate"
         )
         
         if uploaded_file:
             # Display preview
             if uploaded_file.type == "application/pdf":
                 st.info(f"📄 PDF uploaded: {uploaded_file.name}")
-                if not POPPLER_AVAILABLE:
-                    st.warning("⚠️ Poppler not available. PDF OCR may not work. Try converting to PNG/JPG first.")
             else:
-                st.image(uploaded_file, caption="Uploaded Certificate", use_column_width=True)
+                st.image(uploaded_file, caption="Certificate Preview", use_column_width=True)
         
         # Manual input option
         with st.expander("📝 Or Enter Details Manually"):
-            manual_title = st.text_input("Certificate Title", placeholder="e.g., Data Science Bootcamp")
-            manual_org = st.text_input("Organization", placeholder="e.g., Tech Academy")
+            manual_title = st.text_input("Certificate Title*", placeholder="e.g., Python Data Science Specialization")
+            manual_org = st.text_input("Organization*", placeholder="e.g., Coursera, Google, IBM")
             manual_skills = st.text_area("Skills (comma-separated)", placeholder="e.g., Python, Machine Learning, Data Analysis")
+            manual_date = st.text_input("Date", placeholder="e.g., October 2025")
+            
+            use_manual = st.checkbox("Use manual input instead of OCR")
     
     with col2:
         st.markdown("### ✨ Generated Caption")
         
-        if st.button("🚀 Generate Caption", use_container_width=True):
-            if uploaded_file or (manual_title and manual_org):
-                with st.spinner("🔄 Processing your certificate..."):
-                    try:
-                        if uploaded_file:
-                            # Process uploaded file
-                            file_bytes = uploaded_file.read()
-                            result = process_certificate_file(file_bytes, uploaded_file.name)
-                            
-                            if result['success']:
-                                analysis = result['analysis']
-                            else:
-                                st.error(f"❌ Error: {result.get('error', 'Processing failed')}")
-                                return
-                        else:
-                            # Use manual input
-                            analysis = CertificateAnalysis()
-                            analysis.title = manual_title
-                            analysis.organization = manual_org
-                            analysis.certificate_type = 'course'
-                            analysis.completion_status = 'completed'
-                            analysis.confidence_score = 0.9
-                            if manual_skills:
-                                analysis.skills_covered = [s.strip() for s in manual_skills.split(',')]
-                            analysis.industry = analyzer.detect_industry(manual_title + " " + manual_org + " " + manual_skills)
-                        
-                        # Generate caption
-                        caption = generator.generate_caption(analysis, style, platform, include_skills)
-                        hashtags = generator.generate_hashtags(analysis, platform)
-                        
-                        # Display results
-                        st.success("✅ Caption generated successfully!")
-                        
-                        # Analysis details
-                        with st.expander("📊 Certificate Analysis", expanded=True):
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                st.metric("Title", analysis.title[:30] + "..." if len(analysis.title) > 30 else analysis.title)
-                                st.metric("Type", analysis.certificate_type.title())
-                                st.metric("Industry", analysis.industry.replace('_', ' ').title())
-                            with col_b:
-                                st.metric("Organization", analysis.organization or "Not detected")
-                                st.metric("Skills Found", len(analysis.skills_covered))
-                                st.metric("Confidence", f"{analysis.confidence_score:.0%}")
-                        
-                        # Caption display
-                        st.markdown("### 📝 Your Caption")
-                        st.text_area(
-                            "Copy and paste to LinkedIn:",
-                            caption,
-                            height=300,
-                            label_visibility="collapsed"
+        if st.button("🚀 Generate AI Caption", use_container_width=True, type="primary"):
+            if not uploaded_file and not (use_manual and manual_title and manual_org):
+                st.error("❌ Please upload a certificate or enter details manually!")
+            else:
+                with st.spinner("🔄 Processing certificate..."):
+                    # Extract data
+                    if use_manual and manual_title and manual_org:
+                        # Use manual input
+                        cert_data = CertificateData(
+                            title=manual_title,
+                            organization=manual_org,
+                            date_issued=manual_date or datetime.now().strftime("%B %Y"),
+                            skills=[s.strip() for s in manual_skills.split(',')] if manual_skills else [],
+                            industry=extractor._detect_industry(manual_title + " " + manual_skills)
                         )
+                        st.success("✅ Using manual input")
+                    else:
+                        # Extract from file
+                        # Save temp file
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
+                            tmp.write(uploaded_file.getvalue())
+                            tmp_path = tmp.name
                         
-                        # Metrics
-                        col_m1, col_m2, col_m3 = st.columns(3)
-                        with col_m1:
-                            st.metric("Characters", len(caption))
-                        with col_m2:
-                            st.metric("Words", len(caption.split()))
-                        with col_m3:
-                            st.metric("Hashtags", len(hashtags))
+                        try:
+                            # OCR extraction
+                            if uploaded_file.type == "application/pdf":
+                                ocr_result = ocr.extract_from_pdf(tmp_path)
+                            else:
+                                ocr_result = ocr.extract_from_image(tmp_path)
+                            
+                            if not ocr_result['text']:
+                                st.error("❌ Could not extract text from certificate. Try manual input.")
+                                os.unlink(tmp_path)
+                                st.stop()
+                            
+                            st.success(f"✅ Text extracted using {ocr_result['method']}")
+                            
+                            # Extract structured data
+                            cert_data = extractor.extract(ocr_result['text'])
+                            
+                        finally:
+                            os.unlink(tmp_path)
+                    
+                    # Show extracted data
+                    with st.expander("📋 Extracted Certificate Data", expanded=False):
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.markdown(f"**Title:** {cert_data.title}")
+                            st.markdown(f"**Organization:** {cert_data.organization}")
+                            st.markdown(f"**Date:** {cert_data.date_issued}")
+                        with col_b:
+                            st.markdown(f"**Industry:** {cert_data.industry.replace('_', ' ').title()}")
+                            st.markdown(f"**Type:** {cert_data.certificate_type.title()}")
                         
-                        # Download button
+                        if cert_data.skills:
+                            st.markdown("**Skills Detected:**")
+                            skills_html = "".join([f"<span class='skill-badge'>{skill}</span>" for skill in cert_data.skills])
+                            st.markdown(skills_html, unsafe_allow_html=True)
+                
+                # Generate caption
+                with st.spinner("🤖 AI is crafting your caption... (~6-8 seconds)"):
+                    prefs = CaptionPreferences(
+                        tone=tone,
+                        platform=platform,
+                        length=length,
+                        include_hashtags=include_hashtags,
+                        include_skills=include_skills,
+                        custom_message=custom_message,
+                        emoji_style=emoji_style
+                    )
+                    
+                    result = generator.generate_caption(cert_data, prefs)
+                
+                if result['success']:
+                    # Display caption
+                    st.markdown(f"""
+                        <div class='success-box'>
+                            <strong>✅ Caption generated in {result['generation_time']:.1f} seconds!</strong>
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    caption = result['caption']
+                    
+                    st.markdown(f"""
+                        <div class='caption-box'>
+                            {caption.replace(chr(10), '<br>')}
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Action buttons
+                    col_x, col_y, col_z = st.columns(3)
+                    
+                    with col_x:
                         st.download_button(
-                            label="💾 Download Caption",
-                            data=caption,
-                            file_name=f"linkedin_caption_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                            "📥 Download",
+                            caption,
+                            file_name=f"caption_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
                             mime="text/plain",
                             use_container_width=True
                         )
-                        
-                        # Skills display
-                        if analysis.skills_covered:
-                            st.markdown("### 🎯 Detected Skills")
-                            skills_html = " ".join([f"<span style='background: #667eea; color: white; padding: 0.3rem 0.8rem; border-radius: 15px; margin: 0.2rem; display: inline-block;'>{skill}</span>" 
-                                                   for skill in analysis.skills_covered])
-                            st.markdown(skills_html, unsafe_allow_html=True)
-                        
-                    except Exception as e:
-                        st.error(f"❌ Error: {str(e)}")
-                        logger.error(f"Processing error: {e}")
-            else:
-                st.warning("⚠️ Please upload a certificate or fill in manual details")
+                    
+                    with col_y:
+                        if st.button("📋 Copy to Clipboard", use_container_width=True):
+                            st.code(caption, language=None)
+                            st.info("👆 Select and copy the text above")
+                    
+                    with col_z:
+                        if st.button("🔄 Regenerate", use_container_width=True):
+                            st.rerun()
+                    
+                    # Analytics
+                    st.markdown("---")
+                    col_m1, col_m2, col_m3 = st.columns(3)
+                    
+                    with col_m1:
+                        st.markdown(f"""
+                            <div class='metric-card'>
+                                <strong>Word Count</strong><br>
+                                <span style='font-size: 1.5rem; color: #667eea;'>{len(caption.split())}</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_m2:
+                        hashtag_count = caption.count('#')
+                        st.markdown(f"""
+                            <div class='metric-card'>
+                                <strong>Hashtags</strong><br>
+                                <span style='font-size: 1.5rem; color: #667eea;'>{hashtag_count}</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col_m3:
+                        st.markdown(f"""
+                            <div class='metric-card'>
+                                <strong>Generation Time</strong><br>
+                                <span style='font-size: 1.5rem; color: #667eea;'>{result['generation_time']:.1f}s</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
+                else:
+                    st.error(f"❌ Generation failed: {result['error']}")
+    
+    # Footer
+    st.markdown("<hr style='border: 1px solid rgba(102, 126, 234, 0.3); margin-top: 3rem;'>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #888;'>Built with ❤️ using Streamlit & Mistral 7B AI</p>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
