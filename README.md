@@ -2,20 +2,44 @@
 
 # 🎓 AI Certificate Caption Generator
 
-### Transform certificates into professional social media posts in **6-8 seconds**
+### **Deep Learning & Gen AI** • Transform certificates into professional social media posts in **6-8 seconds**
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.28+-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![Mistral](https://img.shields.io/badge/Mistral_7B-AI_Powered-7C3AED?style=for-the-badge)](https://mistral.ai/)
+[![Deep Learning](https://img.shields.io/badge/Deep_Learning-7B_Parameters-FF6B6B?style=for-the-badge&logo=brain&logoColor=white)](https://mistral.ai/)
+[![Gen AI](https://img.shields.io/badge/Generative_AI-Transformer-9C88FF?style=for-the-badge&logo=openai&logoColor=white)](https://mistral.ai/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-**Powered by Mistral 7B AI • Smart Dual OCR • 15+ Customization Options**
+**7 Billion Parameter Neural Network • Multi-Modal AI Pipeline • Advanced Prompt Engineering**
 
-[🚀 Quick Start](#-quick-start) • [✨ Features](#-features) • [📸 Demo](#-demo) • [🔧 Troubleshooting](#-troubleshooting)
+[🚀 Quick Start](#-quick-start) • [✨ Features](#-features) • [📸 Demo](#-demo) • [🧠 Deep Learning](#-deep-learning--gen-ai)
 
 ---
 
 </div>
+
+---
+
+## 🧠 **Deep Learning & Gen AI**
+
+### **Neural Network Architecture**
+
+- ✅ **Mistral 7B** - 7 billion parameter transformer model
+- ✅ **Multi-Head Attention** - State-of-the-art deep learning
+- ✅ **GPU Acceleration** - CUDA-optimized inference (6-8s)
+- ✅ **Q4 Quantization** - Advanced model optimization
+
+### **AI Pipeline**
+
+```
+Certificate Image → CNNs (OCR) → NLP Processing → LLM (7B params) → Generated Caption
+```
+
+### **Advanced Techniques**
+
+- ✅ **Role-Based Prompting** - Expert system design
+- ✅ **In-Context Learning** - Few-shot adaptation
+- ✅ **Multi-Modal AI** - Vision + Language processing
+- ✅ **Transfer Learning** - Pre-trained model deployment
 
 ---
 
