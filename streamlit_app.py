@@ -244,26 +244,52 @@ class CertificateOCR:
     
     def extract_from_image(self, image_path: str) -> Dict:
         """Extract text from image using dual OCR"""
-        img = cv2.imread(image_path)
-        processed = self.preprocess_image(img)
-        
         results = {
             'text': '',
             'confidence': 0.0,
-            'method': 'pytesseract'
+            'method': 'pytesseract',
+            'error': None
         }
+        
+        try:
+            img = cv2.imread(image_path)
+            
+            if img is None:
+                results['error'] = "Could not read image file. The file may be corrupted or in an unsupported format."
+                return results
+            
+            # Check image dimensions
+            height, width = img.shape[:2]
+            if width < 100 or height < 100:
+                results['error'] = "Image is too small (minimum 100x100 pixels). Please upload a higher resolution image."
+                return results
+            
+            if width > 10000 or height > 10000:
+                st.info("📏 Large image detected. Resizing for faster processing...")
+                scale = min(10000/width, 10000/height)
+                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+            
+            processed = self.preprocess_image(img)
+            
+        except Exception as e:
+            results['error'] = f"Image preprocessing failed: {str(e)}"
+            return results
         
         # Try PyTesseract first
         try:
             text = pytesseract.image_to_string(processed, config=self.pytesseract_config)
-            results['text'] = text
+            results['text'] = text.strip()
             results['confidence'] = 0.8
+        except pytesseract.TesseractNotFoundError:
+            results['error'] = "Tesseract OCR is not installed. Please install Tesseract and try again."
+            return results
         except Exception as e:
-            st.warning(f"PyTesseract failed: {e}")
+            st.warning(f"⚠️ PyTesseract extraction had issues: {str(e)}")
         
         # Try EasyOCR if available and text is poor
         if self.easyocr_reader and (not results['text'] or len(results['text']) < 50):
             try:
+                st.info("🔄 Trying enhanced OCR (EasyOCR) for better accuracy...")
                 easyocr_results = self.easyocr_reader.readtext(image_path)
                 easyocr_text = ' '.join([text for (_, text, conf) in easyocr_results if conf > 0.3])
                 
@@ -272,12 +298,16 @@ class CertificateOCR:
                     results['method'] = 'easyocr'
                     results['confidence'] = 0.85
             except Exception as e:
-                st.warning(f"EasyOCR failed: {e}")
+                st.warning(f"⚠️ EasyOCR also had issues: {str(e)}")
+        
+        # Final validation
+        if not results['text'] or len(results['text'].strip()) < 20:
+            results['error'] = "Could not extract sufficient text from the image. The image may be too blurry, low quality, or not contain readable text. Try uploading a clearer image or use manual input."
         
         return results
     
     def extract_from_pdf(self, pdf_path: str) -> Dict:
-        """Extract text from PDF"""
+        """Extract text from PDF (handles both text and image-based PDFs)"""
         results = {
             'text': '',
             'confidence': 0.9,
@@ -290,15 +320,118 @@ class CertificateOCR:
         try:
             doc = fitz.open(pdf_path)
             text = ""
-            for page in doc:
-                text += page.get_text() + "\n"
-            doc.close()
             
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                
+                # First, try to extract text directly
+                page_text = page.get_text().strip()
+                
+                if page_text and len(page_text) > 50:
+                    # Good text extraction
+                    text += page_text + "\n"
+                else:
+                    # Text is poor/empty, try OCR on page images
+                    st.info(f"Page {page_num + 1}: Text extraction poor, using OCR...")
+                    
+                    # Get images from the page
+                    image_list = page.get_images(full=True)
+                    
+                    if image_list:
+                        # Extract and OCR the largest image on the page
+                        for img_index, img in enumerate(image_list):
+                            try:
+                                xref = img[0]
+                                base_image = doc.extract_image(xref)
+                                image_bytes = base_image["image"]
+                                
+                                # Convert to numpy array for OCR
+                                nparr = np.frombuffer(image_bytes, np.uint8)
+                                img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                                
+                                if img_cv is not None:
+                                    # Preprocess and OCR
+                                    processed = self.preprocess_image(img_cv)
+                                    
+                                    # Try PyTesseract
+                                    ocr_text = pytesseract.image_to_string(processed, config=self.pytesseract_config)
+                                    
+                                    if ocr_text and len(ocr_text) > 50:
+                                        text += ocr_text + "\n"
+                                        results['method'] = 'pymupdf_ocr'
+                                        results['confidence'] = 0.8
+                                        break  # Got good text, move to next page
+                                    
+                                    # If PyTesseract fails, try EasyOCR
+                                    if self.easyocr_reader and (not ocr_text or len(ocr_text) < 50):
+                                        # Save temp image for EasyOCR
+                                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_img:
+                                            cv2.imwrite(tmp_img.name, img_cv)
+                                            tmp_img_path = tmp_img.name
+                                        
+                                        try:
+                                            easyocr_results = self.easyocr_reader.readtext(tmp_img_path)
+                                            easyocr_text = ' '.join([txt for (_, txt, conf) in easyocr_results if conf > 0.3])
+                                            
+                                            if len(easyocr_text) > len(ocr_text):
+                                                text += easyocr_text + "\n"
+                                                results['method'] = 'pymupdf_easyocr'
+                                                results['confidence'] = 0.85
+                                                break
+                                        finally:
+                                            os.unlink(tmp_img_path)
+                                
+                            except Exception as e:
+                                st.warning(f"Failed to OCR image {img_index + 1} on page {page_num + 1}: {e}")
+                                continue
+                    else:
+                        # No images found, render page as image and OCR
+                        st.info(f"Page {page_num + 1}: Rendering page as image for OCR...")
+                        
+                        # Render page to image (300 DPI for better quality)
+                        mat = fitz.Matrix(300/72, 300/72)  # 300 DPI
+                        pix = page.get_pixmap(matrix=mat)
+                        
+                        # Convert to numpy array
+                        img_data = pix.tobytes("png")
+                        nparr = np.frombuffer(img_data, np.uint8)
+                        img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        
+                        if img_cv is not None:
+                            # Preprocess and OCR
+                            processed = self.preprocess_image(img_cv)
+                            ocr_text = pytesseract.image_to_string(processed, config=self.pytesseract_config)
+                            
+                            if ocr_text:
+                                text += ocr_text + "\n"
+                                results['method'] = 'pymupdf_page_render'
+                                results['confidence'] = 0.75
+            
+            doc.close()
             results['text'] = text
             return results
-        except Exception as e:
-            st.error(f"PDF extraction failed: {e}")
+            
+        except fitz.FileDataError:
+            results['error'] = "The PDF file is corrupted or password-protected. Please try a different file."
             return results
+        except fitz.EmptyFileError:
+            results['error'] = "The PDF file is empty. Please upload a valid certificate PDF."
+            return results
+        except Exception as e:
+            results['error'] = f"PDF extraction failed: {str(e)}. The file may be corrupted or in an unsupported format."
+            return results
+        finally:
+            # Ensure document is closed
+            try:
+                doc.close()
+            except:
+                pass
+        
+        # Final validation
+        if not text or len(text.strip()) < 20:
+            results['error'] = "Could not extract sufficient text from the PDF. The PDF may contain only images or be of poor quality. Try using manual input instead."
+        
+        return results
 
 # ============================================================================
 # DATA EXTRACTOR
@@ -548,7 +681,7 @@ class MistralCaptionGenerator:
             }
     
     def _build_prompt(self, cert_data: CertificateData, prefs: CaptionPreferences) -> str:
-        """Build optimized prompt for Mistral"""
+        """Build optimized prompt for Mistral with role-based prompting"""
         
         # Tone descriptions
         tone_map = {
@@ -574,8 +707,31 @@ class MistralCaptionGenerator:
             'enthusiastic': '8-10 emojis'
         }
         
-        prompt_parts = [
-            f"Generate a {prefs.platform.upper()} post caption for this certificate achievement.",
+        # System prompt with role-based prompting
+        system_prompt = [
+            "You are an expert social media content creator and LinkedIn influencer with 10+ years of experience.",
+            "You specialize in crafting professional, engaging posts that showcase achievements and certifications.",
+            "",
+            "Your expertise includes:",
+            "- Converting technical achievements into compelling narratives",
+            "- Understanding platform-specific content strategies",
+            "- Creating authentic, human-sounding content that drives engagement",
+            "- Balancing professionalism with personality",
+            "- Industry knowledge across technology, business, design, and data science",
+            "",
+            "Your writing style is:",
+            "- Authentic and personal (never generic)",
+            "- Value-focused (emphasizes impact and growth)",
+            "- Engaging without being overly promotional",
+            "- Optimized for each social media platform",
+            "",
+            "You NEVER use clichéd phrases like 'excited to announce' or 'pleased to share'.",
+            "Instead, you craft unique, compelling openings that grab attention."
+        ]
+        
+        # Task-specific prompt
+        task_prompt = [
+            f"Create a {prefs.platform.upper()} post caption for this certificate achievement:",
             "",
             "CERTIFICATE DETAILS:",
             f"- Certificate: {cert_data.title}",
@@ -584,47 +740,63 @@ class MistralCaptionGenerator:
         ]
         
         if cert_data.skills:
-            prompt_parts.append(f"- Key Skills: {', '.join(cert_data.skills[:5])}")
+            task_prompt.append(f"- Key Skills: {', '.join(cert_data.skills[:5])}")
         
         if cert_data.industry:
-            prompt_parts.append(f"- Industry: {cert_data.industry}")
+            task_prompt.append(f"- Industry: {cert_data.industry}")
         
-        prompt_parts.extend([
+        task_prompt.extend([
             "",
-            "REQUIREMENTS:",
+            "CONTENT REQUIREMENTS:",
             f"- Tone: {tone_map.get(prefs.tone, 'professional')}",
             f"- Length: {length_map.get(prefs.length, '150-200 words')}",
             f"- Emojis: {emoji_map.get(prefs.emoji_style, 'minimal')}",
         ])
         
         if prefs.custom_message:
-            prompt_parts.append(f"- Include this message: {prefs.custom_message}")
+            task_prompt.append(f"- Include this personal message: {prefs.custom_message}")
         
-        prompt_parts.extend([
+        # Platform-specific guidance
+        platform_guidance = {
+            'linkedin': "Focus on professional growth, career development, and industry value.",
+            'twitter': "Make it concise, engaging, and thread-worthy with strong hooks.",
+            'instagram': "Tell a visual story with aspirational and inspirational elements.",
+            'facebook': "Personal achievement sharing with community focus."
+        }
+        
+        task_prompt.extend([
             "",
-            "STRUCTURE:",
-            "1. Opening: Announce the achievement",
-            "2. Body: Describe what was learned and why it matters",
+            "PLATFORM STRATEGY:",
+            f"- {platform_guidance.get(prefs.platform, 'Professional achievement sharing')}",
+            "",
+            "CONTENT STRUCTURE:",
+            "1. Hook: Start with a compelling, unique opening (not clichéd)",
+            "2. Story: Describe the learning journey and key insights",
+            "3. Value: Explain the impact and why it matters",
         ])
         
         if prefs.include_skills:
-            prompt_parts.append("3. Skills: Highlight key skills gained")
+            task_prompt.append("4. Skills: Naturally weave in key competencies gained")
         
         if prefs.include_hashtags:
-            prompt_parts.append("4. Hashtags: 5-8 relevant hashtags at the end")
+            task_prompt.append("5. Hashtags: End with 5-8 relevant, strategic hashtags")
         
-        prompt_parts.extend([
+        task_prompt.extend([
             "",
-            "IMPORTANT:",
-            "- Be authentic and personal",
-            "- Avoid generic phrases like 'excited to announce'",
-            "- Make it feel human-written, not AI-generated",
-            "- Focus on value and growth",
+            "QUALITY STANDARDS:",
+            "- Write as if you're personally sharing your achievement",
+            "- Make it feel human and authentic, not AI-generated",
+            "- Use industry-specific language when appropriate",
+            "- Create content that encourages engagement and conversation",
+            "- Ensure every sentence adds value to the reader",
             "",
-            "Generate the caption:"
+            "Now create the perfect caption:"
         ])
         
-        return "\n".join(prompt_parts)
+        # Combine system prompt and task prompt
+        full_prompt = "\n".join(system_prompt + ["", "---", ""] + task_prompt)
+        
+        return full_prompt
     
     def _post_process(self, caption: str, prefs: CaptionPreferences) -> str:
         """Clean up and format the caption"""
@@ -678,13 +850,82 @@ def main():
     st.markdown("<hr style='border: 1px solid rgba(102, 126, 234, 0.3);'>", unsafe_allow_html=True)
     
     # Initialize components
-    ocr = CertificateOCR()
+    try:
+        ocr = CertificateOCR()
+    except Exception as e:
+        st.error("⚠️ **OCR Initialization Failed!**")
+        st.markdown(f"""
+            ### 🔍 OCR Engine Error
+            
+            **Error:** {str(e)}
+            
+            **Possible Causes:**
+            1. **Tesseract OCR not installed**
+               - Download: https://github.com/UB-Mannheim/tesseract/wiki
+               - Install and add to PATH
+            
+            2. **EasyOCR installation issues**
+               - Optional but recommended
+               - Install: `pip install easyocr`
+            
+            ### 📋 Quick Fix:
+            ```bash
+            # Install Tesseract (Windows)
+            # Download from: https://github.com/UB-Mannheim/tesseract/wiki
+            # Add to PATH: C:\\Program Files\\Tesseract-OCR
+            
+            # Verify installation
+            tesseract --version
+            ```
+            
+            **After installing, restart the app.**
+        """)
+        st.stop()
+    
     extractor = DataExtractor()
     generator = MistralCaptionGenerator()
     
     # Check Mistral availability
     if not generator.available:
-        st.error("⚠️ Mistral 7B not found! Please run: `ollama pull mistral:7b-instruct-q4_K_M`")
+        st.error("⚠️ **Mistral 7B AI Model Not Found!**")
+        st.markdown("""
+            ### 🤖 Setup Required
+            
+            The AI caption generator requires the Mistral 7B model to be installed.
+            
+            **Installation Steps:**
+            
+            1. **Install Ollama** (if not already installed)
+               - Visit: https://ollama.ai/download
+               - Download and install for your system
+            
+            2. **Download Mistral 7B Model**
+               ```bash
+               ollama pull mistral:7b-instruct-q4_K_M
+               ```
+               - Size: ~4.1 GB
+               - Time: 5-10 minutes (depending on internet speed)
+            
+            3. **Verify Installation**
+               ```bash
+               ollama list
+               ```
+               - You should see `mistral:7b-instruct-q4_K_M` in the list
+            
+            4. **Refresh this page** and start generating captions!
+            
+            ---
+            
+            ### 📋 System Requirements
+            - **RAM**: 8GB+ recommended
+            - **GPU**: 4GB+ VRAM (optional but faster)
+            - **Disk Space**: 5GB free
+            - **OS**: Windows 10/11, macOS, or Linux
+            
+            ### ❓ Need Help?
+            - Check README.md for detailed setup instructions
+            - Ensure Ollama service is running: `ollama serve`
+        """)
         st.stop()
     
     # Sidebar configuration
@@ -743,6 +984,38 @@ def main():
         st.markdown("✅ AI Caption Generation")
         st.markdown("✅ Industry Detection")
         st.markdown("✅ Custom Preferences")
+        
+        st.markdown("---")
+        
+        # Troubleshooting section
+        with st.expander("🔧 Troubleshooting"):
+            st.markdown("""
+                **Common Issues:**
+                
+                **1. "Could not extract text"**
+                - Ensure image is clear (300+ DPI)
+                - Avoid blurry or low-light photos
+                - Try manual input instead
+                
+                **2. "File too large"**
+                - Compress image before upload
+                - Max size: 200MB
+                - Use PNG/JPG for best results
+                
+                **3. "Generation timeout"**
+                - Close other GPU applications
+                - Wait and try again
+                - Check Ollama is running
+                
+                **4. "Mistral not found"**
+                - Run: `ollama pull mistral:7b-instruct-q4_K_M`
+                - Verify: `ollama list`
+                
+                **5. "Unclear extraction"**
+                - Use better lighting
+                - Scan at higher resolution
+                - Use manual input as backup
+            """)
     
     # Main content area
     col1, col2 = st.columns([1, 1])
@@ -753,8 +1026,13 @@ def main():
         uploaded_file = st.file_uploader(
             "Choose your certificate",
             type=['pdf', 'png', 'jpg', 'jpeg'],
-            help="Upload PNG, JPG, or PDF certificate"
+            help="Upload PNG, JPG, or PDF certificate (Max 200MB)"
         )
+        
+        # Validate file size
+        if uploaded_file and uploaded_file.size > 200 * 1024 * 1024:
+            st.error("🚫 **File too large!** Please upload a file smaller than 200MB.")
+            st.stop()
         
         if uploaded_file:
             # Display preview
@@ -776,8 +1054,12 @@ def main():
         st.markdown("### ✨ Generated Caption")
         
         if st.button("🚀 Generate AI Caption", use_container_width=True, type="primary"):
+            # Validation checks
             if not uploaded_file and not (use_manual and manual_title and manual_org):
-                st.error("❌ Please upload a certificate or enter details manually!")
+                st.error("❌ **Missing Input!** Please either upload a certificate or enter details manually (Title and Organization are required).")
+                st.info("💡 **Tip:** Use the manual input option below if you're having trouble with file uploads.")
+            elif use_manual and (not manual_title or not manual_org):
+                st.error("❌ **Incomplete Information!** When using manual input, both Certificate Title and Organization are required.")
             else:
                 with st.spinner("🔄 Processing certificate..."):
                     # Extract data
@@ -799,24 +1081,63 @@ def main():
                             tmp_path = tmp.name
                         
                         try:
+                            # Validate file type
+                            file_ext = Path(uploaded_file.name).suffix.lower()
+                            if file_ext not in ['.pdf', '.png', '.jpg', '.jpeg']:
+                                st.error(f"🚫 **Unsupported file type '{file_ext}'!** Please upload PNG, JPG, or PDF files only.")
+                                os.unlink(tmp_path)
+                                st.stop()
+                            
                             # OCR extraction
                             if uploaded_file.type == "application/pdf":
                                 ocr_result = ocr.extract_from_pdf(tmp_path)
                             else:
                                 ocr_result = ocr.extract_from_image(tmp_path)
                             
-                            if not ocr_result['text']:
-                                st.error("❌ Could not extract text from certificate. Try manual input.")
+                            # Check for errors
+                            if ocr_result.get('error'):
+                                st.error(f"❌ **Extraction Failed:** {ocr_result['error']}")
+                                st.markdown("""
+                                    ### 💡 **Troubleshooting Tips:**
+                                    1. **Image Quality**: Ensure the certificate is clear and well-lit
+                                    2. **Resolution**: Use images with at least 300 DPI
+                                    3. **File Format**: Try converting to PNG if using other formats
+                                    4. **Manual Input**: Use the manual entry option below as a fallback
+                                    5. **Text Visibility**: Make sure text is not obscured by watermarks
+                                """)
                                 os.unlink(tmp_path)
                                 st.stop()
                             
-                            st.success(f"✅ Text extracted using {ocr_result['method']}")
+                            if not ocr_result['text'] or len(ocr_result['text'].strip()) < 20:
+                                st.error("❌ **Insufficient text extracted!** The image may be too unclear or low quality.")
+                                st.warning("⚠️ **Extracted text:** " + (ocr_result['text'][:100] + '...' if len(ocr_result['text']) > 100 else ocr_result['text'] or '(empty)'))
+                                st.markdown("""
+                                    ### 📝 **Please try one of these options:**
+                                    1. **Upload a clearer image** - Take a new photo with better lighting
+                                    2. **Use a scanner** - Scan the certificate at 300 DPI or higher
+                                    3. **Try a different file format** - Convert to PNG for best results
+                                    4. **Use manual input** - Enter certificate details manually below
+                                """)
+                                os.unlink(tmp_path)
+                                st.stop()
+                            
+                            st.success(f"✅ Text extracted using {ocr_result['method']} (Confidence: {ocr_result.get('confidence', 0.8)*100:.0f}%)")
                             
                             # Extract structured data
                             cert_data = extractor.extract(ocr_result['text'])
                             
+                            # Validate extracted data quality
+                            if not cert_data.title or len(cert_data.title) < 5:
+                                st.warning("⚠️ **Low Quality Extraction:** Could not identify certificate title clearly. Please review extracted data.")
+                            
+                            if not cert_data.organization or cert_data.organization == "Professional Institution":
+                                st.info("ℹ️ **Note:** Organization name not detected. Using default value.")
+                            
                         finally:
-                            os.unlink(tmp_path)
+                            try:
+                                os.unlink(tmp_path)
+                            except:
+                                pass
                     
                     # Show extracted data
                     with st.expander("📋 Extracted Certificate Data", expanded=False):
@@ -915,7 +1236,80 @@ def main():
                         """, unsafe_allow_html=True)
                     
                 else:
-                    st.error(f"❌ Generation failed: {result['error']}")
+                    error_msg = result.get('error', 'Unknown error')
+                    st.error(f"❌ **Caption Generation Failed!**")
+                    
+                    # Specific error messages based on error type
+                    if 'not available' in error_msg.lower() or 'not found' in error_msg.lower():
+                        st.markdown("""
+                            ### 🤖 **Mistral Model Not Available**
+                            
+                            The AI model is not installed. Please run:
+                            ```bash
+                            ollama pull mistral:7b-instruct-q4_K_M
+                            ```
+                            
+                            **Steps:**
+                            1. Open a terminal/command prompt
+                            2. Run the command above
+                            3. Wait for download (~4.1 GB)
+                            4. Refresh this page and try again
+                        """)
+                    elif 'timeout' in error_msg.lower():
+                        st.markdown("""
+                            ### ⏱️ **Generation Timed Out**
+                            
+                            The AI took too long to respond (>30 seconds).
+                            
+                            **Possible causes:**
+                            - System is under heavy load
+                            - GPU/CPU is busy with other tasks
+                            - Network/Ollama connection issues
+                            
+                            **Try:**
+                            1. Wait a moment and try again
+                            2. Close other GPU-intensive applications
+                            3. Restart Ollama: `ollama serve`
+                        """)
+                    elif 'connection' in error_msg.lower():
+                        st.markdown("""
+                            ### 🔌 **Connection Error**
+                            
+                            Cannot connect to Ollama service.
+                            
+                            **Please check:**
+                            1. Ollama is running: `ollama serve`
+                            2. Ollama is accessible: `ollama list`
+                            3. No firewall blocking port 11434
+                            
+                            **Restart Ollama:**
+                            ```bash
+                            # Stop Ollama
+                            taskkill /F /IM ollama.exe
+                            
+                            # Start Ollama
+                            ollama serve
+                            ```
+                        """)
+                    else:
+                        st.markdown(f"""
+                            ### 🔍 **Error Details**
+                            
+                            ```
+                            {error_msg}
+                            ```
+                            
+                            ### 💡 **Troubleshooting:**
+                            1. **Check Ollama status:** Run `ollama list` in terminal
+                            2. **Verify model:** Ensure mistral:7b-instruct-q4_K_M is installed
+                            3. **Restart Ollama:** `ollama serve`
+                            4. **Check resources:** Ensure enough RAM/VRAM (4GB+ needed)
+                            5. **Try again:** Sometimes temporary issues resolve themselves
+                            
+                            If problems persist, try manual input with simpler details.
+                        """)
+                    
+                    st.info("💡 **Alternative:** Try using manual input with simplified details to reduce AI processing load.")
     
     # Footer
     st.markdown("<hr style='border: 1px solid rgba(102, 126, 234, 0.3); margin-top: 3rem;'>", unsafe_allow_html=True)
