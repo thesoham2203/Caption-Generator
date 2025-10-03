@@ -3,6 +3,7 @@
 ## ✅ What You Have Now
 
 ### **Clean Architecture**
+
 ```
 📦 Certificate Caption Generator
 ├── Frontend: Streamlit (Beautiful UI)
@@ -13,6 +14,7 @@
 ```
 
 ### **New Features**
+
 1. ✨ **5 Tone Options**: Professional, Enthusiastic, Humble, Confident, Casual
 2. 🎨 **4 Platform Formats**: LinkedIn, Twitter, Instagram, Facebook
 3. 📏 **3 Length Modes**: Short (100w), Medium (150w), Long (200w)
@@ -27,17 +29,21 @@
 ## 🚀 Quick Commands
 
 ### Test the New App
+
 ```powershell
 streamlit run streamlit_app_new.py --server.port 8505
 ```
+
 **URL**: http://localhost:8505
 
 ### Finalize Project (Replace old files)
+
 ```powershell
 .\finalize_project.ps1
 ```
 
 This will:
+
 - ✅ Backup old streamlit_app.py
 - ✅ Replace with new version
 - ✅ Update README.md
@@ -45,23 +51,25 @@ This will:
 - ✅ Keep backups safe
 
 ### Verify Mistral
+
 ```powershell
 ollama list
 ```
+
 Should show: `mistral:7b-instruct-q4_K_M`
 
 ---
 
 ## 📊 Performance Improvements
 
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| **Generation Speed** | 25s (LLaVA) | 6-8s (Mistral) | **3-4x faster** ⚡ |
-| **Code Lines** | 1,381 | 800 | **42% reduction** 📉 |
-| **Dependencies** | 15 packages | 7 packages | **53% fewer** 🎯 |
-| **VRAM Usage** | 5-6GB | ~4GB | **Better efficiency** 💾 |
-| **File Size** | 65KB | 35KB | **46% smaller** 📁 |
-| **Customization Options** | 3 | 15+ | **5x more** 🎨 |
+| Metric                    | Before      | After          | Improvement              |
+| ------------------------- | ----------- | -------------- | ------------------------ |
+| **Generation Speed**      | 25s (LLaVA) | 6-8s (Mistral) | **3-4x faster** ⚡       |
+| **Code Lines**            | 1,381       | 800            | **42% reduction** 📉     |
+| **Dependencies**          | 15 packages | 7 packages     | **53% fewer** 🎯         |
+| **VRAM Usage**            | 5-6GB       | ~4GB           | **Better efficiency** 💾 |
+| **File Size**             | 65KB        | 35KB           | **46% smaller** 📁       |
+| **Customization Options** | 3           | 15+            | **5x more** 🎨           |
 
 ---
 
@@ -71,7 +79,7 @@ Before finalizing, verify:
 
 - [ ] App loads at http://localhost:8505
 - [ ] Upload PNG certificate → Works
-- [ ] Upload JPG certificate → Works  
+- [ ] Upload JPG certificate → Works
 - [ ] Upload PDF (if you have PyMuPDF) → Works
 - [ ] Manual input mode → Works
 - [ ] All 5 tones generate different styles
@@ -90,7 +98,9 @@ Before finalizing, verify:
 ## 💡 Usage Examples
 
 ### Example 1: Professional LinkedIn Post
+
 **Settings:**
+
 - Tone: Professional
 - Platform: LinkedIn
 - Length: Medium
@@ -104,7 +114,9 @@ Before finalizing, verify:
 ---
 
 ### Example 2: Enthusiastic Instagram
+
 **Settings:**
+
 - Tone: Enthusiastic
 - Platform: Instagram
 - Length: Short
@@ -118,7 +130,9 @@ Before finalizing, verify:
 ---
 
 ### Example 3: Humble Twitter Thread
+
 **Settings:**
+
 - Tone: Humble
 - Platform: Twitter
 - Length: Short
@@ -153,18 +167,23 @@ Caption-Generator/
 ## 🎤 Interview Talking Points
 
 ### **Architecture**
+
 > "I built a microservices architecture separating the Streamlit frontend from the AI backend. The frontend handles OCR, data extraction, and user customization, then sends structured prompts to Mistral 7B running via Ollama. This design allows independent scaling and easier maintenance."
 
 ### **Technology Choice**
+
 > "I evaluated LLaVA 7B, Mistral 7B, and LLaMA 3.2 3B. LLaVA was too slow (25s) despite vision capabilities. LLaMA 3.2 was faster but lower quality. Mistral 7B Q4 offered the best balance: 6-8 second generation with excellent instruction following, running smoothly on a 6GB GPU."
 
 ### **Optimization**
+
 > "I used Q4 quantization to reduce VRAM from 7GB to 4GB without significant quality loss. Ollama keeps the model loaded in memory, so subsequent requests are fast. The dual OCR approach (PyTesseract + EasyOCR) ensures reliable text extraction even from low-quality scans."
 
 ### **User Experience**
+
 > "I implemented 15+ customization options based on user research. Users can control tone, length, emoji usage, and add personal messages. The UI provides real-time feedback with generation progress and metrics. Export options include download and clipboard copy for convenience."
 
 ### **Production Readiness**
+
 > "The system has graceful error handling at every stage: OCR fallback, manual input option, and clear error messages. The architecture supports easy deployment—frontend can scale independently from the AI backend. Metrics tracking helps identify bottlenecks."
 
 ---
@@ -172,11 +191,13 @@ Caption-Generator/
 ## 🚀 Deployment Options
 
 ### **Local (Current)**
+
 - ✅ Running now on http://localhost:8505
 - ✅ Best for demos and personal use
 - ✅ No costs
 
 ### **Streamlit Cloud** (Easy)
+
 1. Push to GitHub
 2. Visit streamlit.io/cloud
 3. Connect repository
@@ -185,11 +206,13 @@ Caption-Generator/
 **Note:** Ollama needs separate hosting (see below)
 
 ### **Ollama Hosting**
+
 - **Option 1:** Run Ollama on same machine (current setup)
 - **Option 2:** Ollama on separate server, update API endpoint
 - **Option 3:** Use cloud GPU (RunPod, Vast.ai) for Ollama
 
 ### **Full Stack** (Advanced)
+
 - Frontend: Streamlit Cloud / Heroku
 - Backend: Ollama on AWS EC2 (GPU instance)
 - Containerize with Docker for easy deployment
@@ -199,18 +222,21 @@ Caption-Generator/
 ## 📈 Future Enhancements (Ideas)
 
 ### Short-term (1 week)
+
 - [ ] Add caption history (save previous generations)
 - [ ] Batch mode (multiple certificates at once)
 - [ ] Export to PDF with certificate + caption
 - [ ] More platforms (Medium, Dev.to, Reddit)
 
 ### Medium-term (1 month)
+
 - [ ] Fine-tune Mistral on certificate captions dataset
 - [ ] Add tone analysis (show detected sentiment)
 - [ ] Template library (save/load favorite styles)
 - [ ] Browser extension for quick generation
 
 ### Long-term (3 months)
+
 - [ ] Mobile app (React Native + Ollama API)
 - [ ] Multi-language support (non-English certificates)
 - [ ] Team collaboration features
@@ -221,24 +247,31 @@ Caption-Generator/
 ## 🐛 Known Issues & Solutions
 
 ### Issue 1: "Mistral model not found"
+
 **Solution:**
+
 ```powershell
 ollama pull mistral:7b-instruct-q4_K_M
 ollama list  # Verify
 ```
 
 ### Issue 2: Slow first generation (~30s)
+
 **Expected Behavior:** First generation loads model into memory
 **Solution:** Subsequent generations will be 6-8s
 
 ### Issue 3: OCR fails on certificate
+
 **Solutions:**
+
 1. Try higher resolution image
 2. Use manual input mode (always works)
 3. Ensure Tesseract installed: `tesseract --version`
 
 ### Issue 4: "Port already in use"
+
 **Solution:**
+
 ```powershell
 streamlit run streamlit_app.py --server.port 8506
 ```
@@ -265,7 +298,9 @@ Before pushing to GitHub:
 ## 🎊 Summary
 
 ### **What You Built**
+
 A production-ready AI certificate caption generator with:
+
 - ✅ Fast generation (6-8s with GPU)
 - ✅ Comprehensive customization (15+ options)
 - ✅ Beautiful UI (futuristic dark theme)
@@ -274,6 +309,7 @@ A production-ready AI certificate caption generator with:
 - ✅ Mistral 7B AI integration
 
 ### **Perfect For**
+
 - 💼 Portfolio projects
 - 🎤 Technical interviews
 - 📱 Personal use
@@ -281,6 +317,7 @@ A production-ready AI certificate caption generator with:
 - 📚 Case studies
 
 ### **Skills Demonstrated**
+
 - Python development
 - AI/ML integration (Mistral 7B)
 - System architecture design
